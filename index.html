@@ -49,15 +49,12 @@
   <section id="s-email" class="hidden">
     <label for="email">Work email</label>
     <input id="email" type="email" autocomplete="email" placeholder="name@lumacyte.com">
-    <button id="send">Email me a sign-in code</button>
+    <button id="send">Email me a sign-in link</button>
   </section>
 
   <!-- Step 2: code -->
   <section id="s-code" class="hidden">
-    <p class="msg">We sent a 6-digit code to <strong id="sent-to"></strong>. It expires in a few minutes.</p>
-    <label for="code">Code</label>
-    <input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="123456">
-    <button id="verify">Sign in</button>
+    <p class="msg">We sent a sign-in link to <strong id="sent-to"></strong>. Open the email on this computer and click <strong>Sign in</strong>. It brings you back here to approve. The link works once and expires shortly.</p>
     <button id="restart" class="secondary">Use a different email</button>
   </section>
 
@@ -89,7 +86,7 @@
   // -------------------------------------------------------------------------------
 
   import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
-  const supabase = createClient(SUPABASE_URL, PUBLISHABLE_KEY, { auth: { persistSession: true, detectSessionInUrl: false } });
+  const supabase = createClient(SUPABASE_URL, PUBLISHABLE_KEY, { auth: { persistSession: true, detectSessionInUrl: true, flowType: "implicit" } });
 
   const $ = (id) => document.getElementById(id);
   const show = (id) => ["s-email", "s-code", "s-consent", "s-idle"].forEach((s) => $(s).classList.toggle("hidden", s !== id));
@@ -119,19 +116,11 @@
     const email = $("email").value.trim().toLowerCase();
     if (!email.includes("@")) { status("Enter your work email.", true); return; }
     $("send").disabled = true; status("Sending…");
-    const { error } = await supabase.auth.signInWithOtp({ email, options: { shouldCreateUser: false } });
+    const back = location.origin + location.pathname + (authId ? "?authorization_id=" + encodeURIComponent(authId) : "");
+    const { error } = await supabase.auth.signInWithOtp({ email, options: { shouldCreateUser: false, emailRedirectTo: back } });
     $("send").disabled = false;
     if (error) { status(error.message.includes("Signups not allowed") ? "This email has no COSMOS seat. Ask a CRM admin." : error.message, true); return; }
-    $("sent-to").textContent = email; status(""); show("s-code"); $("code").focus();
-  };
-
-  $("verify").onclick = async () => {
-    const email = $("sent-to").textContent, token = $("code").value.trim();
-    $("verify").disabled = true; status("Checking…");
-    const { error } = await supabase.auth.verifyOtp({ email, token, type: "email" });
-    $("verify").disabled = false;
-    if (error) { status("That code didn't work. Check it or request a new one.", true); return; }
-    status(""); afterSignIn();
+    $("sent-to").textContent = email; status(""); show("s-code");
   };
 
   $("restart").onclick = () => { status(""); show("s-email"); };
@@ -148,7 +137,16 @@
   $("deny").onclick = () => decide(false);
   $("signout").onclick = async () => { await supabase.auth.signOut(); location.reload(); };
 
-  afterSignIn().catch((e) => status(String(e?.message || e), true));
+  async function boot() {
+    if (location.hash.includes("error_description")) {
+      const h = new URLSearchParams(location.hash.slice(1));
+      status((h.get("error_description") || "Sign-in link not valid").replace(/\+/g, " ") + ". Request a new link.", true);
+    }
+    await supabase.auth.getSession();           // picks up the session from a sign-in link
+    if (location.hash) history.replaceState(null, "", location.pathname + location.search);  // drop tokens from the address bar
+    await afterSignIn();
+  }
+  boot().catch((e) => status(String(e?.message || e), true));
 </script>
 </body>
 </html>
