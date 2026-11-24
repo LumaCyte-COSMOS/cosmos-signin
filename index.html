@@ -47,6 +47,8 @@
 
   <!-- Step 1: email -->
   <section id="s-email" class="hidden">
+    <button id="ms" class="hidden">Sign in with Microsoft</button>
+    <p id="or" class="msg hidden" style="text-align:center">or get a sign-in link by email</p>
     <label for="email">Work email</label>
     <input id="email" type="email" autocomplete="email" placeholder="name@lumacyte.com">
     <button id="send">Email me a sign-in link</button>
@@ -83,6 +85,7 @@
   // ---- Configuration: the only lines that change between test and production ----
   const SUPABASE_URL = "https://hbuihrzwfhwqxeqvvhwb.supabase.co";   // cosmos-crm-test
   const PUBLISHABLE_KEY = "sb_publishable_fCBh7LOyrACkywxm5ZNI1A_EfSQbvDw"; // public by design; grants no CRM access
+  const ENV_LABEL = "Test";  // "" for production
   // -------------------------------------------------------------------------------
 
   import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
@@ -112,12 +115,30 @@
     show("s-consent");
   }
 
+  const backUrl = () => location.origin + location.pathname + (authId ? "?authorization_id=" + encodeURIComponent(authId) : "");
+
+  // Microsoft sign-in: shown only when the Azure provider is switched on in Supabase
+  async function enableMicrosoft() {
+    try {
+      const r = await fetch(SUPABASE_URL + "/auth/v1/settings", { headers: { apikey: PUBLISHABLE_KEY } });
+      const st = await r.json();
+      if (st && st.external && st.external.azure) {
+        $("ms").classList.remove("hidden"); $("or").classList.remove("hidden");
+        $("send").classList.add("secondary");
+      }
+    } catch (e) { /* email link stays available */ }
+  }
+  $("ms").onclick = async () => {
+    $("ms").disabled = true; status("Opening Microsoft sign-in…");
+    const { error } = await supabase.auth.signInWithOAuth({ provider: "azure", options: { scopes: "email", redirectTo: backUrl() } });
+    if (error) { $("ms").disabled = false; status(error.message, true); }
+  };
+
   $("send").onclick = async () => {
     const email = $("email").value.trim().toLowerCase();
     if (!email.includes("@")) { status("Enter your work email.", true); return; }
     $("send").disabled = true; status("Sending…");
-    const back = location.origin + location.pathname + (authId ? "?authorization_id=" + encodeURIComponent(authId) : "");
-    const { error } = await supabase.auth.signInWithOtp({ email, options: { shouldCreateUser: false, emailRedirectTo: back } });
+    const { error } = await supabase.auth.signInWithOtp({ email, options: { shouldCreateUser: false, emailRedirectTo: backUrl() } });
     $("send").disabled = false;
     if (error) { status(error.message.includes("Signups not allowed") ? "This email has no COSMOS seat. Ask a CRM admin." : error.message, true); return; }
     $("sent-to").textContent = email; status(""); show("s-code");
@@ -140,10 +161,13 @@
   async function boot() {
     if (location.hash.includes("error_description")) {
       const h = new URLSearchParams(location.hash.slice(1));
-      status((h.get("error_description") || "Sign-in link not valid").replace(/\+/g, " ") + ". Request a new link.", true);
+      const d = (h.get("error_description") || "Sign-in not completed").replace(/\+/g, " ");
+      status(/signup/i.test(d) ? "This account has no COSMOS seat. Ask a CRM admin." : d + ". Try again.", true);
     }
     await supabase.auth.getSession();           // picks up the session from a sign-in link
     if (location.hash) history.replaceState(null, "", location.pathname + location.search);  // drop tokens from the address bar
+    if (ENV_LABEL) document.querySelector(".sub").textContent += " · " + ENV_LABEL;
+    enableMicrosoft();
     await afterSignIn();
   }
   boot().catch((e) => status(String(e?.message || e), true));
